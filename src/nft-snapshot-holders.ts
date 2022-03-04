@@ -1,7 +1,6 @@
 import {
   PublicKey,
   Connection,
-  ParsedAccountData,
   PartiallyDecodedInstruction,
 } from "@solana/web3.js";
 import fs from "fs";
@@ -33,15 +32,17 @@ import hashlistStepN from "./hashlist/hashlist_StepN.json";
 import hashlistSypool from "./hashlist/hashlist_Sypool.json";
 import hashlistWormhole from "./hashlist/hashlist_Wormhole.json";
 import hashlistZebec from "./hashlist/hashlist_Zebec.json";
-import { isTooManyTries, retry } from "ts-retry";
+import { isTooManyTries, retryAsync } from "ts-retry";
 
 // https://explorer.solana.com/block/122948286
 const SNAPSHOT_SLOT = 122948286;
 
-const rpc = new Connection("https://rpc.ankr.com/solana");
+// Previously we used Ankr's https://rpc.ankr.com/solana but it frequently
+// misses historical data
+const rpc = new Connection("https://ssc-dao.genesysgo.net/");
 
-// Queue to process each NFT with concurrency 100.
-const q = async.queue(processNFT, 100);
+// Queue to process each NFT
+const q = async.queue(processNFT, 10);
 q.error(function (err, task) {
   console.error(`NFT queue task experienced an error ${err}`);
 });
@@ -53,125 +54,139 @@ type NFT = {
 
 async function processNFT(nft: NFT) {
   const filename = `snapshot_${nft.campaign}.txt`;
-  try {
-    await retry(
-      async () => {
-        // In metaplex, since every NFT is its own "token" with supply = 1, the only
-        // way to get NFT owner is through getTokenLargestAccounts
-        const largestAccounts = await rpc.getTokenLargestAccounts(
-          new PublicKey(nft.token)
-        );
-        const largestAccountInfo = await rpc.getParsedAccountInfo(
-          largestAccounts.value[0].address
-        );
 
-        // Get current owner
-        let owner = (largestAccountInfo?.value?.data as ParsedAccountData)
-          .parsed.info.owner;
+  await retryAsync(
+    async () => {
+      // Check all related transactions to find owner at the time of the snapshot
+      const confirmedSignatures = await rpc.getConfirmedSignaturesForAddress2(
+        new PublicKey(nft.token)
+      );
 
-        // Check all related transactions to find owner at the time of the snapshot
-        const confirmedSignatures = await rpc.getSignaturesForAddress(
-          new PublicKey(nft.token)
-        );
+      var owner = "";
+      var handled = false;
 
-        var handled = false;
-        for (const sig of confirmedSignatures) {
-          if (sig.slot > SNAPSHOT_SLOT) {
-            // Need to find the last tx right before snapshot time
-            continue;
-          } else {
-            const tx = await rpc.getParsedTransaction(sig.signature);
-            if (tx?.transaction.message.instructions) {
-              // First check instructions to find whether it's being used by
-              // some special programs such as marketplace custodial wallet
-              for (const instRaw of tx?.transaction.message.instructions) {
-                // Instruction is of type "PartiallyDecodedInstruction"
-                const inst = instRaw as PartiallyDecodedInstruction;
+      // Signatures returned from RPC are in reverse chronological order
+      for (const sig of confirmedSignatures) {
+        if (sig.slot > SNAPSHOT_SLOT) {
+          // Need to find the last tx right before snapshot time
+          continue;
+        } else {
+          const tx = await rpc.getParsedTransaction(sig.signature);
 
-                // Interaction with Magic eden program that handles escrow/listing/cancel/executesale
-                if (
-                  inst.programId.toBase58() ==
-                  "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K"
-                ) {
-                  owner = inst.accounts[0].toBase58();
-                  console.log(
-                    `${nft.token}: Found magic eden escrow/listing/cancel/executesale tx. Owner: ${owner}`
-                  );
-                  handled = true;
-                }
+          if (tx?.transaction.message.instructions) {
+            // First check instructions to find whether it's being used by
+            // some special programs such as marketplace custodial wallet
+            for (const instRaw of tx?.transaction.message.instructions) {
+              // Instruction is of type "PartiallyDecodedInstruction"
+              const inst = instRaw as PartiallyDecodedInstruction;
 
-                // Interaction with solsea that handles escrow/listing/cancel/executesale
-                // Since solsea program's input is very tricky to decipher, we will take the
-                // payer account instead, as either the buyer or the seller has to initiate
-                // the transaction
-                if (
-                  inst.programId.toBase58() ==
-                  "617jbWo616ggkDxvW1Le8pV38XLbVSyWY8ae6QUmGBAU"
-                ) {
-                  owner =
-                    tx.transaction.message.accountKeys[0].pubkey.toBase58();
-                  console.log(
-                    `${nft.token}: Found solsea escrow/listing/cancel/executesale tx. Owner: ${owner}`
-                  );
-                  handled = true;
-                }
-
-                // Interaction with slope that handles escrow/listing/cancel/executesale
-                if (
-                  inst.programId.toBase58() ==
-                  "cCSrAM5p4R3tzUnja7hHCMTzdWgvwKhdKwe3cchRVLz"
-                ) {
-                  owner = inst.accounts[0].toBase58();
-                  console.log(
-                    `${nft.token}: Found slope escrow/listing/cancel/executesale tx. Owner: ${owner}`
-                  );
-                  handled = true;
-                }
-
-                if (handled) {
-                  fs.appendFileSync(
-                    filename,
-                    `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
-                  );
-                  return;
-                }
+              // Interaction with MagicEden program. Handle only if there are
+              // token balance updates, otherwise it could be a cancelbuy tx
+              if (
+                inst.programId.toBase58() ==
+                  "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K" &&
+                tx?.meta?.postTokenBalances &&
+                tx?.meta?.postTokenBalances?.length > 0
+              ) {
+                owner = inst.accounts[0].toBase58();
+                console.log(
+                  `${nft.token}: Found magic eden tx. Owner: ${owner}`
+                );
+                handled = true;
               }
-            }
 
-            // If the token didn't interact with special programs, then this is
-            // likely a transfer event or mint
-            if (tx?.meta?.postTokenBalances) {
-              for (const bal of tx?.meta?.postTokenBalances) {
-                if (bal.uiTokenAmount.uiAmount === 1.0) {
-                  owner = bal.owner!;
-                  console.log(
-                    `${nft.token}: Found token mint/transfer tx. Owner: ${owner}`
-                  );
-                  fs.appendFileSync(
-                    filename,
-                    `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
-                  );
-                  handled = true;
-                  return;
-                }
+              // Interaction with solsea that handles escrow/listing/cancel/executesale
+              // Since solsea program's input is very tricky to decipher, we will take the
+              // payer account instead, as either the buyer or the seller has to initiate
+              // the transaction
+              if (
+                inst.programId.toBase58() ==
+                "617jbWo616ggkDxvW1Le8pV38XLbVSyWY8ae6QUmGBAU"
+              ) {
+                owner = tx.transaction.message.accountKeys[0].pubkey.toBase58();
+                console.log(`${nft.token}: Found solsea tx. Owner: ${owner}`);
+                handled = true;
+              }
+
+              // Interaction with slope that handles escrow/listing/cancel/executesale
+              if (
+                inst.programId.toBase58() ==
+                "cCSrAM5p4R3tzUnja7hHCMTzdWgvwKhdKwe3cchRVLz"
+              ) {
+                owner = inst.accounts[0].toBase58();
+                console.log(`${nft.token}: Found slope tx. Owner: ${owner}`);
+                handled = true;
+              }
+
+              if (handled) {
+                fs.appendFileSync(
+                  filename,
+                  `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
+                );
+                return;
               }
             }
           }
-        }
 
-        // This will trigger retries.
-        throw `TX maybe not properly handled. Owner: ${owner}`;
-      },
-      { delay: 1000, maxTry: 10 }
-    );
-  } catch (err) {
-    if (isTooManyTries(err)) {
-      console.error(`${nft.token}: too many retries getting sig.`);
-    } else {
-      console.error(`${nft.token}: ${err}`);
-    }
-    return;
-  }
+          if (
+            (!tx?.meta?.preTokenBalances ||
+              tx?.meta?.preTokenBalances.length == 0) &&
+            tx?.meta?.postTokenBalances &&
+            tx?.meta?.postTokenBalances?.length == 1 &&
+            tx?.meta?.postTokenBalances[0].mint == nft.token
+          ) {
+            // If no pre balance but only 1 post balance, this can be either a mint
+            // or a special transfer tx (token account update)
+            const balance = tx?.meta?.postTokenBalances[0];
+            if (balance.uiTokenAmount.uiAmount === 1.0) {
+              owner = balance.owner!;
+              console.log(
+                `${nft.token}: Found metaplex mint tx. Owner: ${owner}`
+              );
+              handled = true;
+            } else if (!balance.uiTokenAmount.uiAmount) {
+              // This is a special type of transfer, where the wallet only creates
+              // a new token account for the new owner, but without actual transfer
+              // instruction. Only some wallets do this (maybe only one wallet).
+              owner = balance.owner!;
+              console.log(
+                `${nft.token}: Found special transfer tx. Owner: ${owner}`
+              );
+              handled = true;
+            }
+          } else if (
+            tx?.meta?.preTokenBalances &&
+            tx?.meta?.preTokenBalances.length != 0 &&
+            tx?.meta?.postTokenBalances &&
+            tx?.meta?.postTokenBalances.length != 0
+          ) {
+            // If pre balances are present, then this can be a normal transfer event
+            for (const balance of tx?.meta?.postTokenBalances) {
+              if (balance.uiTokenAmount.uiAmount === 1.0) {
+                owner = balance.owner!;
+                console.log(
+                  `${nft.token}: Found normal transfer tx. Owner: ${owner}`
+                );
+                handled = true;
+              }
+            }
+          }
+
+          if (handled) {
+            fs.appendFileSync(
+              filename,
+              `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
+            );
+            return;
+          }
+        }
+      }
+
+      // This will trigger retries.
+      throw `${nft.token}: Not properly handled`;
+    },
+    { delay: 1000, maxTry: 10 }
+  );
 }
 
 for (const token of hashlist01) {
