@@ -44,7 +44,7 @@ const SNAPSHOT_SLOT = 122948286;
 const rpc = new Connection("<emitted, private rpc>");
 
 // Queue to process each NFT
-const q = async.queue(processNFT, 200);
+const q = async.queue(processNFT, 500);
 q.error(function (err, task) {
   console.error(`NFT queue task experienced an error ${err}`);
 });
@@ -72,29 +72,29 @@ async function processNFT(nft: NFT) {
       var handled = false;
 
       // No need to handle any tx in this case, just get token largest accounts
-      if (sorted[0].slot < SNAPSHOT_SLOT) {
-        const largestAccounts = await rpc.getTokenLargestAccounts(
-          new PublicKey(nft.token)
-        );
+      // if (sorted[0].slot < SNAPSHOT_SLOT) {
+      //   const largestAccounts = await rpc.getTokenLargestAccounts(
+      //     new PublicKey(nft.token)
+      //   );
 
-        if (largestAccounts.value.length == 0) {
-          // NFT is burned
-          console.log(`${nft.token}: NFT Burned, no owner`);
-          return;
-        }
+      //   if (largestAccounts.value.length == 0) {
+      //     // NFT is burned
+      //     console.log(`${nft.token}: NFT Burned, no owner`);
+      //     return;
+      //   }
 
-        const largestAccountInfo = await rpc.getParsedAccountInfo(
-          largestAccounts.value[0].address
-        );
-        const owner = (largestAccountInfo?.value?.data as ParsedAccountData)
-          .parsed.info.owner;
-        console.log(`${nft.token}: No tx since snapshot. Owner: ${owner}`);
-        fs.appendFileSync(
-          filename,
-          `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
-        );
-        return;
-      }
+      //   const largestAccountInfo = await rpc.getParsedAccountInfo(
+      //     largestAccounts.value[0].address
+      //   );
+      //   const owner = (largestAccountInfo?.value?.data as ParsedAccountData)
+      //     .parsed.info.owner;
+      //   console.log(`${nft.token}: No tx since snapshot. Owner: ${owner}`);
+      //   fs.appendFileSync(
+      //     filename,
+      //     `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
+      //   );
+      //   return;
+      // }
 
       // Signatures returned from RPC are in reverse chronological order
       for (const sig of sorted) {
