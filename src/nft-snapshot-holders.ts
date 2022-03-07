@@ -1,6 +1,8 @@
 import {
   PublicKey,
   Connection,
+  ParsedInstruction,
+  ParsedAccountData,
   PartiallyDecodedInstruction,
 } from "@solana/web3.js";
 import fs from "fs";
@@ -39,10 +41,10 @@ const SNAPSHOT_SLOT = 122948286;
 
 // Previously we used Ankr's https://rpc.ankr.com/solana but it frequently
 // misses historical data
-const rpc = new Connection("https://ssc-dao.genesysgo.net/");
+const rpc = new Connection("<emitted, private rpc>");
 
 // Queue to process each NFT
-const q = async.queue(processNFT, 10);
+const q = async.queue(processNFT, 200);
 q.error(function (err, task) {
   console.error(`NFT queue task experienced an error ${err}`);
 });
@@ -61,17 +63,49 @@ async function processNFT(nft: NFT) {
       const confirmedSignatures = await rpc.getConfirmedSignaturesForAddress2(
         new PublicKey(nft.token)
       );
+      // GenesysGo will append sigs older than 8 days at the end
+      const sorted = confirmedSignatures.sort((a, b) =>
+        a.slot > b.slot ? -1 : a.slot < b.slot ? 1 : 0
+      );
 
       var owner = "";
       var handled = false;
 
+      // No need to handle any tx in this case, just get token largest accounts
+      if (sorted[0].slot < SNAPSHOT_SLOT) {
+        const largestAccounts = await rpc.getTokenLargestAccounts(
+          new PublicKey(nft.token)
+        );
+
+        if (largestAccounts.value.length == 0) {
+          // NFT is burned
+          console.log(`${nft.token}: NFT Burned, no owner`);
+          return;
+        }
+
+        const largestAccountInfo = await rpc.getParsedAccountInfo(
+          largestAccounts.value[0].address
+        );
+        const owner = (largestAccountInfo?.value?.data as ParsedAccountData)
+          .parsed.info.owner;
+        console.log(`${nft.token}: No tx since snapshot. Owner: ${owner}`);
+        fs.appendFileSync(
+          filename,
+          `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
+        );
+        return;
+      }
+
       // Signatures returned from RPC are in reverse chronological order
-      for (const sig of confirmedSignatures) {
+      for (const sig of sorted) {
         if (sig.slot > SNAPSHOT_SLOT) {
           // Need to find the last tx right before snapshot time
           continue;
         } else {
           const tx = await rpc.getParsedTransaction(sig.signature);
+          if (tx?.meta?.err != null) {
+            continue;
+          }
 
           if (tx?.transaction.message.instructions) {
             // First check instructions to find whether it's being used by
@@ -165,7 +199,15 @@ async function processNFT(nft: NFT) {
               // This is a special type of transfer, where the wallet only creates
               // a new token account for the new owner, but without actual transfer
               // instruction. Only some wallets do this (maybe only one wallet).
-              owner = balance.owner!;
+              const createTokenAccountInstRaw =
+                tx?.transaction.message.instructions[0];
+              const createTokenAccountInst =
+                createTokenAccountInstRaw as ParsedInstruction;
+              if (createTokenAccountInst.parsed.type != "create") {
+                console.error(`${nft.token}: unhandled`);
+              }
+
+              owner = createTokenAccountInst.parsed.info.wallet;
               console.log(
                 `${nft.token}: Found special transfer tx. Owner: ${owner}`
               );
