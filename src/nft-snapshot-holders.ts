@@ -88,11 +88,28 @@ async function processNFT(nft: NFT) {
                 tx?.meta?.postTokenBalances &&
                 tx?.meta?.postTokenBalances?.length > 0
               ) {
-                owner = inst.accounts[0].toBase58();
-                console.log(
-                  `${nft.token}: Found magic eden tx. Owner: ${owner}`
-                );
-                handled = true;
+                // 2B3vSpRNKZZW...
+                if (inst.data.startsWith("2B3vSp")) {
+                  owner = inst.accounts[0].toBase58();
+                  console.log(
+                    `${nft.token}: Found magic eden sell listing tx. Owner: ${owner}`
+                  );
+                  handled = true;
+                } else if (inst.data.startsWith("d6ite")) {
+                  // owner = inst.accounts[0].toBase58();
+                  owner = tx?.meta?.postTokenBalances[0].owner!;
+                  console.log(
+                    `${nft.token}: Found magic eden execute sell tx. Owner: ${owner}`
+                  );
+                  handled = true;
+                } else {
+                  owner = inst.accounts[0].toBase58();
+                  // owner = tx?.meta?.postTokenBalances[0].owner!
+                  console.log(
+                    `${nft.token}: Found magic eden tx. Owner: ${owner}`
+                  );
+                  handled = true;
+                }
               }
 
               // Interaction with solsea that handles escrow/listing/cancel/executesale
@@ -171,14 +188,13 @@ async function processNFT(nft: NFT) {
               }
             }
           }
-
-          if (handled) {
-            fs.appendFileSync(
-              filename,
-              `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
-            );
-            return;
-          }
+        }
+        if (handled) {
+          fs.appendFileSync(
+            filename,
+            `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
+          );
+          return;
         }
       }
 
