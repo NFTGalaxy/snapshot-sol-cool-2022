@@ -41,7 +41,9 @@ const SNAPSHOT_SLOT = 122948286;
 
 // Previously we used Ankr's https://rpc.ankr.com/solana but it frequently
 // misses historical data
-const rpc = new Connection("<emitted, private rpc>");
+const rpc = new Connection(
+  "<emitted private rpc>"
+);
 
 // Queue to process each NFT
 const q = async.queue(processNFT, 500);
@@ -70,31 +72,6 @@ async function processNFT(nft: NFT) {
 
       var owner = "";
       var handled = false;
-
-      // No need to handle any tx in this case, just get token largest accounts
-      // if (sorted[0].slot < SNAPSHOT_SLOT) {
-      //   const largestAccounts = await rpc.getTokenLargestAccounts(
-      //     new PublicKey(nft.token)
-      //   );
-
-      //   if (largestAccounts.value.length == 0) {
-      //     // NFT is burned
-      //     console.log(`${nft.token}: NFT Burned, no owner`);
-      //     return;
-      //   }
-
-      //   const largestAccountInfo = await rpc.getParsedAccountInfo(
-      //     largestAccounts.value[0].address
-      //   );
-      //   const owner = (largestAccountInfo?.value?.data as ParsedAccountData)
-      //     .parsed.info.owner;
-      //   console.log(`${nft.token}: No tx since snapshot. Owner: ${owner}`);
-      //   fs.appendFileSync(
-      //     filename,
-      //     `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
-      //   );
-      //   return;
-      // }
 
       // Signatures returned from RPC are in reverse chronological order
       for (const sig of sorted) {
@@ -168,14 +145,13 @@ async function processNFT(nft: NFT) {
                 console.log(`${nft.token}: Found slope tx. Owner: ${owner}`);
                 handled = true;
               }
-
-              if (handled) {
-                fs.appendFileSync(
-                  filename,
-                  `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
-                );
-                return;
-              }
+            }
+            if (handled) {
+              fs.appendFileSync(
+                filename,
+                `Owner:${owner},NFT:${nft.token},Campaign:${nft.campaign}\n`
+              );
+              return;
             }
           }
 
