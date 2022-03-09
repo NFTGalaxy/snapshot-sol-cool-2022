@@ -179,15 +179,15 @@ async function processNFT(nft: NFT) {
                 tx?.transaction.message.instructions[0];
               const createTokenAccountInst =
                 createTokenAccountInstRaw as ParsedInstruction;
-              if (createTokenAccountInst.parsed.type != "create") {
-                console.error(`${nft.token}: unhandled`);
-              }
-
-              owner = createTokenAccountInst.parsed.info.wallet;
+              const tokenAccount = createTokenAccountInst.parsed.info.account;
               console.log(
-                `${nft.token}: Found special transfer tx. Owner: ${owner}`
+                `${nft.token}: Found create token account tx. New token account ${tokenAccount}`
               );
-              handled = true;
+              const res = await handleTokenAccountTx(nft.token, tokenAccount);
+              if (res) {
+                owner = res;
+                handled = true;
+              }
             }
           } else if (
             tx?.meta?.preTokenBalances &&
@@ -303,4 +303,38 @@ for (const token of hashlistWormhole) {
 }
 for (const token of hashlistZebec) {
   q.push({ campaign: "Zebec", token: token });
+}
+
+async function handleTokenAccountTx(token: string, tokenAccount: string) {
+  const confirmedSignatures = await rpc.getConfirmedSignaturesForAddress2(
+    new PublicKey(tokenAccount)
+  );
+  const sorted = confirmedSignatures.sort((a, b) =>
+    a.slot > b.slot ? -1 : a.slot < b.slot ? 1 : 0
+  );
+
+  for (const sig of sorted) {
+    if (sig.slot > SNAPSHOT_SLOT) {
+      // Need to find the last tx right before snapshot time
+      continue;
+    } else {
+      const tx = await rpc.getParsedTransaction(sig.signature);
+
+      for (const balance of tx?.meta?.postTokenBalances!) {
+        if (balance.uiTokenAmount.uiAmount === 1.0) {
+          const owner = balance.owner!;
+          console.log(
+            `${token}: Found token account transfer tx. Owner: ${owner}`
+          );
+          return owner;
+        }
+      }
+    }
+  }
+
+  console.log(
+    `${token}: Did not find token account transfer tx. No ownership update`
+  );
+
+  return null;
 }
