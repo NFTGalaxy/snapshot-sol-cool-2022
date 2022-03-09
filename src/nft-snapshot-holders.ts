@@ -5,6 +5,7 @@ import {
   ParsedAccountData,
   PartiallyDecodedInstruction,
 } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import fs from "fs";
 import async from "async";
 import hashlist01 from "./hashlist/hashlist_01.json";
@@ -170,6 +171,12 @@ async function processNFT(nft: NFT) {
               console.log(
                 `${nft.token}: Found metaplex mint tx. Owner: ${owner}`
               );
+              const tokenAccount =
+                tx.transaction.message.accountKeys[5].pubkey.toBase58(); // Our backend implementation
+              const res = await handleTokenAccountTx(nft.token, tokenAccount);
+              if (res) {
+                owner = res;
+              }
               handled = true;
             } else if (!balance.uiTokenAmount.uiAmount) {
               // This is a special type of transfer, where the wallet only creates
@@ -202,6 +209,17 @@ async function processNFT(nft: NFT) {
                 console.log(
                   `${nft.token}: Found normal transfer tx. Owner: ${owner}`
                 );
+                const tokenAccount = await findAssociatedTokenAddress(
+                  new PublicKey(owner),
+                  new PublicKey(nft.token)
+                );
+                const res = await handleTokenAccountTx(
+                  nft.token,
+                  tokenAccount.toBase58()
+                );
+                if (res) {
+                  owner = res;
+                }
                 handled = true;
               }
             }
@@ -337,4 +355,24 @@ async function handleTokenAccountTx(token: string, tokenAccount: string) {
   );
 
   return null;
+}
+
+const SPL_ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID: PublicKey = new PublicKey(
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+);
+
+async function findAssociatedTokenAddress(
+  walletAddress: PublicKey,
+  tokenMintAddress: PublicKey
+): Promise<PublicKey> {
+  return (
+    await PublicKey.findProgramAddress(
+      [
+        walletAddress.toBuffer(),
+        TOKEN_PROGRAM_ID.toBuffer(),
+        tokenMintAddress.toBuffer(),
+      ],
+      SPL_ASSOCIATED_TOKEN_ACCOUNT_PROGRAM_ID
+    )
+  )[0];
 }
