@@ -23,6 +23,7 @@ This community is #SolCool
 - 22/27 NFT holder snapshot on Mar 15, 2022 at 03:30:00 UTC: [solana address list](snapshot-0315-22-nft-holder.csv)
 - 22/27 NFT holders' associated EVM addresses (base on addresses linked in galaxy ID): [evm address list](snapshot-0315-22-nft-holder-evm.csv)
 - Final evm address list whitelist, after matching [02/10/2022 snapshot](https://github.com/NFTGalaxy/galaxy-nft-holder-feb-10/blob/main/snapshot/unique-addresses.csv): [evm address list](evm-whitelist.csv)
+- Final solana address reward list is [here](final-solana-rewards.csv). This address list is an union of 03/15 silver Dr. SOL holder, gold Dr. SOL holder, as well as 22 NFT holders.
 
 ## Partner NFT holder snapshot on March 1st, 2022 (UTC):
 
